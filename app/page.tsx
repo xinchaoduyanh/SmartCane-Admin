@@ -52,6 +52,7 @@ export default function Home() {
   const [deviceConnection, setDeviceConnection] = useState<any>(null);
   const [mounted, setMounted] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
+  const [forceRealMode, setForceRealMode] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -102,6 +103,7 @@ export default function Home() {
 
   // Handle data received from device
   const handleDataReceived = (data: any) => {
+    console.log("Data received from device:", data);
     if (data.distance) {
       setDistance(data.distance);
     }

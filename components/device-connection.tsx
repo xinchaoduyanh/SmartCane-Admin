@@ -68,15 +68,64 @@ export function DeviceConnection({
       setIsConnecting(true);
       setError(null);
 
-      // Check if we're in a preview/development environment
-      const isPreviewMode =
-        window.location.hostname === "localhost" ||
-        window.location.hostname.includes("vercel.app") ||
-        window.location.hostname.includes("netlify.app");
+      // Thêm log ở đây
+      console.log("Đang chạy ở chế độ thật, sẽ gọi requestPort");
 
-      if (isPreviewMode) {
-        // Simulate connection for preview mode
-        setTimeout(() => {
+      // Đoạn này phải luôn chạy
+      const port = await navigator.serial.requestPort();
+      await port.open({ baudRate: 9600 });
+
+      portRef.current = port;
+
+      // Set up the reader
+      const reader = port.readable?.getReader();
+      readerRef.current = reader;
+
+      // Set up the writer
+      const writer = port.writable?.getWriter();
+      writerRef.current = writer;
+
+      setIsConnected(true);
+
+      // Tạo đối tượng kết nối thực
+      const realConnection = {
+        readConfiguration: async () => {
+          await sendCommand("GET_CONFIG");
+        },
+        updateMessageTemplate: async (message: string) => {
+          await sendCommand(`SET_MESSAGE:${message}`);
+        },
+        clearPhoneNumbers: async () => {
+          // Không có lệnh xóa tất cả, nên chúng ta sẽ không làm gì ở đây
+          return Promise.resolve();
+        },
+        addPhoneNumber: async (phone: string) => {
+          await sendCommand(`ADD_PHONE:${phone}`);
+        },
+      };
+
+      onConnected(realConnection);
+
+      // Start reading data
+      readData();
+
+      // Vào chế độ cấu hình
+      await sendCommand("CONFIG");
+    } catch (err: any) {
+      if (
+        err.name === "SecurityError" ||
+        err.message?.includes("permissions policy")
+      ) {
+        setError(
+          "Quyền truy cập Serial bị từ chối. Vui lòng sử dụng Chrome/Edge trên HTTPS hoặc localhost."
+        );
+
+        // Offer to use demo mode
+        if (
+          confirm(
+            "Bạn có muốn sử dụng chế độ demo để xem trước chức năng không?"
+          )
+        ) {
           setIsConnected(true);
 
           // Tạo đối tượng kết nối mô phỏng
@@ -105,109 +154,11 @@ export function DeviceConnection({
           };
 
           onConnected(simulatedConnection);
-
-          // Simulate data for demo purposes
           simulateDeviceData();
-        }, 1500);
-        return;
-      }
-
-      // For production environments, try to use the actual Web Serial API
-      try {
-        // Request port access
-        const port = await navigator.serial.requestPort();
-        await port.open({ baudRate: 9600 });
-
-        portRef.current = port;
-
-        // Set up the reader
-        const reader = port.readable?.getReader();
-        readerRef.current = reader;
-
-        // Set up the writer
-        const writer = port.writable?.getWriter();
-        writerRef.current = writer;
-
-        setIsConnected(true);
-
-        // Tạo đối tượng kết nối thực
-        const realConnection = {
-          readConfiguration: async () => {
-            await sendCommand("GET_CONFIG");
-          },
-          updateMessageTemplate: async (message: string) => {
-            await sendCommand(`SET_MESSAGE:${message}`);
-          },
-          clearPhoneNumbers: async () => {
-            // Không có lệnh xóa tất cả, nên chúng ta sẽ không làm gì ở đây
-            return Promise.resolve();
-          },
-          addPhoneNumber: async (phone: string) => {
-            await sendCommand(`ADD_PHONE:${phone}`);
-          },
-        };
-
-        onConnected(realConnection);
-
-        // Start reading data
-        readData();
-
-        // Vào chế độ cấu hình
-        await sendCommand("CONFIG");
-      } catch (err: any) {
-        if (
-          err.name === "SecurityError" ||
-          err.message?.includes("permissions policy")
-        ) {
-          setError(
-            "Quyền truy cập Serial bị từ chối. Vui lòng sử dụng Chrome/Edge trên HTTPS hoặc localhost."
-          );
-
-          // Offer to use demo mode
-          if (
-            confirm(
-              "Bạn có muốn sử dụng chế độ demo để xem trước chức năng không?"
-            )
-          ) {
-            setIsConnected(true);
-
-            // Tạo đối tượng kết nối mô phỏng
-            const simulatedConnection = {
-              readConfiguration: async () => {
-                // Mô phỏng đọc cấu hình
-                setTimeout(() => {
-                  onConfigReceived({
-                    message: "Cứu tôi với tôi đang ở {GPS}",
-                    phones: ["0987654321", "0123456789"],
-                  });
-                }, 1000);
-              },
-              updateMessageTemplate: async (message: string) => {
-                // Mô phỏng cập nhật tin nhắn
-                return new Promise((resolve) => setTimeout(resolve, 1000));
-              },
-              clearPhoneNumbers: async () => {
-                // Mô phỏng xóa số điện thoại
-                return new Promise((resolve) => setTimeout(resolve, 1000));
-              },
-              addPhoneNumber: async (phone: string) => {
-                // Mô phỏng thêm số điện thoại
-                return new Promise((resolve) => setTimeout(resolve, 500));
-              },
-            };
-
-            onConnected(simulatedConnection);
-            simulateDeviceData();
-          }
-        } else {
-          throw err; // Re-throw other errors
         }
+      } else {
+        throw err; // Re-throw other errors
       }
-    } catch (err) {
-      console.error("Error connecting to device:", err);
-      setError(
-        err instanceof Error ? err.message : "Lỗi kết nối không xác định"
-      );
     } finally {
       setIsConnecting(false);
     }
@@ -268,6 +219,7 @@ export function DeviceConnection({
           buffer = lines.pop() || "";
 
           for (const line of lines) {
+            console.log("Serial line:", line);
             processLine(line.trim());
           }
         }
@@ -282,6 +234,7 @@ export function DeviceConnection({
 
   // Process a line of data from the device
   const processLine = (line: string) => {
+    console.log("Processing line:", line);
     if (!line) return;
 
     try {
