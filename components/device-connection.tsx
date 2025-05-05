@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Usb, WifiOff, Wifi, AlertTriangle } from "lucide-react";
 import { motion } from "framer-motion";
+import { useConnection } from "@/contexts/connection-context";
 
 // Web Serial API types
 declare global {
@@ -30,8 +31,9 @@ export function DeviceConnection({
   onDataReceived,
   onConfigReceived,
 }: DeviceConnectionProps) {
+  // Sử dụng context thay vì state cục bộ
+  const { isConnected, setIsConnected, deviceConnection, setDeviceConnection } = useConnection();
   const [isConnecting, setIsConnecting] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const portRef = useRef<any>(null);
   const readerRef = useRef<any>(null);
@@ -41,20 +43,146 @@ export function DeviceConnection({
   const configDataRef = useRef<any>({});
   const isReceivingConfigRef = useRef<boolean>(false);
 
-  // Check if Web Serial API is supported
-  const isSerialSupported =
-    typeof navigator !== "undefined" && "serial" in navigator;
-
+  // Initialize with null to avoid hydration mismatch
+  const [isSerialSupported, setIsSerialSupported] = useState<boolean | null>(null);
   const [isDemoMode, setIsDemoMode] = useState(false);
 
+  // Move client-side checks to useEffect to avoid hydration mismatch
   useEffect(() => {
+    // Check if Web Serial API is supported (client-side only)
+    setIsSerialSupported(typeof navigator !== "undefined" && "serial" in navigator);
+
+    // Check for demo mode (client-side only)
     if (typeof window !== "undefined") {
       setIsDemoMode(
         window.location.hostname !== "localhost" &&
           (window.location.hostname.includes("vercel.app") ||
             window.location.hostname.includes("netlify.app"))
       );
+
+      // Khôi phục kết nối nếu trạng thái được lưu
+      const savedState = localStorage.getItem('deviceConnectionState');
+      if (savedState === 'connected' && !isConnected) {
+        // Tạo kết nối mô phỏng nếu đang ở chế độ demo
+        if (window.location.hostname !== "localhost" &&
+            (window.location.hostname.includes("vercel.app") ||
+             window.location.hostname.includes("netlify.app"))) {
+
+          // Tạo đối tượng kết nối mô phỏng với EEPROM
+          // Lưu trữ dữ liệu mô phỏng trong localStorage để giả lập EEPROM
+          const simulatedEEPROM = {
+            savePhones: (phones: string[]) => {
+              localStorage.setItem('simulatedPhones', JSON.stringify(phones));
+            },
+            loadPhones: (): string[] => {
+              const stored = localStorage.getItem('simulatedPhones');
+              return stored ? JSON.parse(stored) : ["0987654321", "0123456789"];
+            },
+            saveMessage: (message: string) => {
+              localStorage.setItem('simulatedMessage', message);
+            },
+            loadMessage: (): string => {
+              return localStorage.getItem('simulatedMessage') || "Cứu tôi với tôi đang ở {GPS}";
+            }
+          };
+
+          // Tạo đối tượng kết nối mô phỏng
+          const simulatedConnection = {
+            readConfiguration: async () => {
+              // Mô phỏng đọc cấu hình từ EEPROM
+              setTimeout(() => {
+                const phones = simulatedEEPROM.loadPhones();
+                const message = simulatedEEPROM.loadMessage();
+                onConfigReceived({
+                  message: message,
+                  phones: phones,
+                });
+              }, 1000);
+            },
+            updateMessageTemplate: async (message: string) => {
+              // Mô phỏng cập nhật tin nhắn và lưu vào EEPROM
+              console.log("Mô phỏng: Cập nhật tin nhắn SOS: " + message);
+              simulatedEEPROM.saveMessage(message);
+              setTimeout(() => {
+                console.log("Cap nhat tin nhan SOS thanh cong!");
+              }, 500);
+              return new Promise((resolve) => setTimeout(resolve, 1000));
+            },
+            clearPhoneNumbers: async () => {
+              // Mô phỏng xóa tất cả số điện thoại từ EEPROM
+              console.log("Mô phỏng: Xóa tất cả số điện thoại");
+              simulatedEEPROM.savePhones([]);
+              return new Promise((resolve) => setTimeout(resolve, 1000));
+            },
+            addPhoneNumber: async (phone: string) => {
+              // Mô phỏng thêm số điện thoại vào EEPROM
+              console.log("Mô phỏng: Thêm số điện thoại: " + phone);
+              const phones = simulatedEEPROM.loadPhones();
+              if (!phones.includes(phone)) {
+                phones.push(phone);
+                simulatedEEPROM.savePhones(phones);
+              }
+
+              setTimeout(() => {
+                console.log("Them so dien thoai thanh cong!");
+                // Cập nhật danh sách số điện thoại mô phỏng
+                onConfigReceived({
+                  message: simulatedEEPROM.loadMessage(),
+                  phones: simulatedEEPROM.loadPhones()
+                });
+              }, 500);
+              return new Promise((resolve) => setTimeout(resolve, 500));
+            },
+            deletePhoneNumber: async (index: number) => {
+              // Mô phỏng xóa số điện thoại theo index từ EEPROM
+              console.log("Mô phỏng: Xóa số điện thoại tại vị trí: " + (index + 1));
+              const phones = simulatedEEPROM.loadPhones();
+              if (index >= 0 && index < phones.length) {
+                phones.splice(index, 1);
+                simulatedEEPROM.savePhones(phones);
+              }
+
+              setTimeout(() => {
+                console.log("Xoa so dien thoai thanh cong!");
+                onConfigReceived({
+                  message: simulatedEEPROM.loadMessage(),
+                  phones: simulatedEEPROM.loadPhones()
+                });
+              }, 500);
+              return new Promise((resolve) => setTimeout(resolve, 500));
+            },
+            displayPhoneNumbers: async () => {
+              // Mô phỏng hiển thị danh sách số điện thoại từ EEPROM
+              console.log("Mô phỏng: Hiển thị danh sách số điện thoại");
+              const phones = simulatedEEPROM.loadPhones();
+
+              setTimeout(() => {
+                console.log("Danh sach so dien thoai:");
+                phones.forEach((phone, index) => {
+                  console.log(`${index + 1}. ${phone}`);
+                });
+              }, 500);
+              return new Promise((resolve) => setTimeout(resolve, 500));
+            },
+            reloadPhoneNumbers: async () => {
+              // Mô phỏng tải lại danh sách từ EEPROM
+              setTimeout(() => {
+                onConfigReceived({
+                  message: simulatedEEPROM.loadMessage(),
+                  phones: simulatedEEPROM.loadPhones()
+                });
+              }, 500);
+              return new Promise((resolve) => setTimeout(resolve, 500));
+            }
+          };
+
+          setIsConnected(true);
+          onConnected(simulatedConnection);
+          simulateDeviceData();
+        }
+      }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Connect to the device
@@ -72,7 +200,19 @@ export function DeviceConnection({
       console.log("Đang chạy ở chế độ thật, sẽ gọi requestPort");
 
       // Đoạn này phải luôn chạy
-      const port = await navigator.serial.requestPort();
+      let port;
+      try {
+        port = await navigator.serial.requestPort();
+      } catch (err: any) {
+        // Xử lý khi người dùng không chọn cổng
+        if (err.name === 'NotFoundError') {
+          setError("Không có cổng nào được chọn. Vui lòng chọn một cổng để kết nối.");
+          return; // Thoát sớm, không cần throw lỗi
+        } else {
+          throw err; // Re-throw các lỗi khác
+        }
+      }
+
       await port.open({ baudRate: 9600 });
 
       portRef.current = port;
@@ -90,20 +230,41 @@ export function DeviceConnection({
       // Tạo đối tượng kết nối thực
       const realConnection = {
         readConfiguration: async () => {
-          await sendCommand("GET_CONFIG");
+          // Gửi lệnh DISPLAY để đọc danh sách số điện thoại từ EEPROM
+          await sendCommand("DISPLAY");
+          // Đọc cấu hình sẽ được xử lý trong processLine
         },
         updateMessageTemplate: async (message: string) => {
-          await sendCommand(`SET_MESSAGE:${message}`);
+          // Cập nhật tin nhắn SOS
+          await sendCommand(`UPDATE_MSG ${message}`);
         },
         clearPhoneNumbers: async () => {
-          // Không có lệnh xóa tất cả, nên chúng ta sẽ không làm gì ở đây
+          // Arduino không hỗ trợ xóa tất cả, nên chúng ta sẽ xóa từng số
+          // Việc này sẽ được xử lý ở phía frontend
           return Promise.resolve();
         },
         addPhoneNumber: async (phone: string) => {
-          await sendCommand(`ADD_PHONE:${phone}`);
+          // Thêm số điện thoại - Arduino sẽ tự động lưu vào EEPROM
+          await sendCommand(`ADD ${phone}`);
         },
+        deletePhoneNumber: async (index: number) => {
+          // Xóa số điện thoại theo index (Arduino index bắt đầu từ 1)
+          // Arduino sẽ tự động cập nhật EEPROM
+          await sendCommand(`DELETE ${index + 1}`);
+        },
+        displayPhoneNumbers: async () => {
+          // Hiển thị danh sách số điện thoại đã lưu trong EEPROM
+          await sendCommand("DISPLAY");
+        },
+        // Thêm phương thức để tải lại danh sách từ EEPROM
+        reloadPhoneNumbers: async () => {
+          // Gửi lệnh DISPLAY để đọc lại danh sách từ EEPROM
+          await sendCommand("DISPLAY");
+        }
       };
 
+      // Lưu connection vào context
+      setDeviceConnection(realConnection);
       onConnected(realConnection);
 
       // Start reading data
@@ -128,31 +289,116 @@ export function DeviceConnection({
         ) {
           setIsConnected(true);
 
+          // Tạo đối tượng kết nối mô phỏng với EEPROM
+          // Lưu trữ dữ liệu mô phỏng trong localStorage để giả lập EEPROM
+          const simulatedEEPROM = {
+            savePhones: (phones: string[]) => {
+              localStorage.setItem('simulatedPhones', JSON.stringify(phones));
+            },
+            loadPhones: (): string[] => {
+              const stored = localStorage.getItem('simulatedPhones');
+              return stored ? JSON.parse(stored) : ["0987654321", "0123456789"];
+            },
+            saveMessage: (message: string) => {
+              localStorage.setItem('simulatedMessage', message);
+            },
+            loadMessage: (): string => {
+              return localStorage.getItem('simulatedMessage') || "Cứu tôi với tôi đang ở {GPS}";
+            }
+          };
+
           // Tạo đối tượng kết nối mô phỏng
           const simulatedConnection = {
             readConfiguration: async () => {
-              // Mô phỏng đọc cấu hình
+              // Mô phỏng đọc cấu hình từ EEPROM
               setTimeout(() => {
+                const phones = simulatedEEPROM.loadPhones();
+                const message = simulatedEEPROM.loadMessage();
                 onConfigReceived({
-                  message: "Cứu tôi với tôi đang ở {GPS}",
-                  phones: ["0987654321", "0123456789"],
+                  message: message,
+                  phones: phones,
                 });
               }, 1000);
             },
             updateMessageTemplate: async (message: string) => {
-              // Mô phỏng cập nhật tin nhắn
+              // Mô phỏng cập nhật tin nhắn và lưu vào EEPROM
+              console.log("Mô phỏng: Cập nhật tin nhắn SOS: " + message);
+              simulatedEEPROM.saveMessage(message);
+              setTimeout(() => {
+                console.log("Cap nhat tin nhan SOS thanh cong!");
+              }, 500);
               return new Promise((resolve) => setTimeout(resolve, 1000));
             },
             clearPhoneNumbers: async () => {
-              // Mô phỏng xóa số điện thoại
+              // Mô phỏng xóa tất cả số điện thoại từ EEPROM
+              console.log("Mô phỏng: Xóa tất cả số điện thoại");
+              simulatedEEPROM.savePhones([]);
               return new Promise((resolve) => setTimeout(resolve, 1000));
             },
             addPhoneNumber: async (phone: string) => {
-              // Mô phỏng thêm số điện thoại
+              // Mô phỏng thêm số điện thoại vào EEPROM
+              console.log("Mô phỏng: Thêm số điện thoại: " + phone);
+              const phones = simulatedEEPROM.loadPhones();
+              if (!phones.includes(phone)) {
+                phones.push(phone);
+                simulatedEEPROM.savePhones(phones);
+              }
+
+              setTimeout(() => {
+                console.log("Them so dien thoai thanh cong!");
+                // Cập nhật danh sách số điện thoại mô phỏng
+                onConfigReceived({
+                  message: simulatedEEPROM.loadMessage(),
+                  phones: simulatedEEPROM.loadPhones()
+                });
+              }, 500);
               return new Promise((resolve) => setTimeout(resolve, 500));
             },
+            deletePhoneNumber: async (index: number) => {
+              // Mô phỏng xóa số điện thoại theo index từ EEPROM
+              console.log("Mô phỏng: Xóa số điện thoại tại vị trí: " + (index + 1));
+              const phones = simulatedEEPROM.loadPhones();
+              if (index >= 0 && index < phones.length) {
+                phones.splice(index, 1);
+                simulatedEEPROM.savePhones(phones);
+              }
+
+              setTimeout(() => {
+                console.log("Xoa so dien thoai thanh cong!");
+                onConfigReceived({
+                  message: simulatedEEPROM.loadMessage(),
+                  phones: simulatedEEPROM.loadPhones()
+                });
+              }, 500);
+              return new Promise((resolve) => setTimeout(resolve, 500));
+            },
+            displayPhoneNumbers: async () => {
+              // Mô phỏng hiển thị danh sách số điện thoại từ EEPROM
+              console.log("Mô phỏng: Hiển thị danh sách số điện thoại");
+              const phones = simulatedEEPROM.loadPhones();
+
+              setTimeout(() => {
+                console.log("Danh sach so dien thoai:");
+                phones.forEach((phone, index) => {
+                  console.log(`${index + 1}. ${phone}`);
+                });
+              }, 500);
+              return new Promise((resolve) => setTimeout(resolve, 500));
+            },
+            reloadPhoneNumbers: async () => {
+              // Mô phỏng tải lại danh sách từ EEPROM
+              setTimeout(() => {
+                onConfigReceived({
+                  message: simulatedEEPROM.loadMessage(),
+                  phones: simulatedEEPROM.loadPhones()
+                });
+              }, 500);
+              return new Promise((resolve) => setTimeout(resolve, 500));
+            }
           };
 
+          // Lưu connection vào context
+          setDeviceConnection(simulatedConnection);
           onConnected(simulatedConnection);
           simulateDeviceData();
         }
@@ -185,6 +431,7 @@ export function DeviceConnection({
       }
 
       setIsConnected(false);
+      setDeviceConnection(null);
       onDisconnected();
     } catch (err) {
       console.error("Error disconnecting from device:", err);
@@ -268,6 +515,39 @@ export function DeviceConnection({
         return;
       }
 
+      // Xử lý danh sách số điện thoại từ Arduino
+      if (line === "Danh sach so dien thoai:") {
+        // Bắt đầu nhận danh sách số điện thoại
+        configDataRef.current = { phones: [] };
+        return;
+      } else if (line.match(/^\d+\. /)) {
+        // Dòng chứa số điện thoại: "1. 0123456789"
+        const phoneMatch = line.match(/^\d+\. (.+)$/);
+        if (phoneMatch && phoneMatch[1]) {
+          if (!configDataRef.current.phones) {
+            configDataRef.current.phones = [];
+          }
+          configDataRef.current.phones.push(phoneMatch[1]);
+        }
+        return;
+      } else if (line === "Cap nhat tin nhan SOS thanh cong!") {
+        // Xác nhận cập nhật tin nhắn thành công
+        console.log("Cập nhật tin nhắn SOS thành công");
+        return;
+      } else if (line === "Them so dien thoai thanh cong!") {
+        // Xác nhận thêm số điện thoại thành công
+        console.log("Thêm số điện thoại thành công");
+        // Gửi lệnh DISPLAY để cập nhật danh sách
+        setTimeout(() => sendCommand("DISPLAY"), 500);
+        return;
+      } else if (line === "Xoa so dien thoai thanh cong!") {
+        // Xác nhận xóa số điện thoại thành công
+        console.log("Xóa số điện thoại thành công");
+        // Gửi lệnh DISPLAY để cập nhật danh sách
+        setTimeout(() => sendCommand("DISPLAY"), 500);
+        return;
+      }
+
       // Parse data from the Arduino output format
       const data: any = {};
 
@@ -292,6 +572,18 @@ export function DeviceConnection({
             lng: Number.parseFloat(match[2]),
           };
         }
+      }
+
+      // Nếu nhận được danh sách số điện thoại đầy đủ, gửi đến component cha
+      if (configDataRef.current && configDataRef.current.phones &&
+          configDataRef.current.phones.length > 0 &&
+          line.includes("----------------------------")) {
+        // Đảm bảo có tin nhắn mặc định nếu chưa có
+        if (!configDataRef.current.message) {
+          configDataRef.current.message = "Cứu tôi với tôi đang ở {GPS}";
+        }
+        onConfigReceived(configDataRef.current);
+        configDataRef.current = {};
       }
 
       if (Object.keys(data).length > 0) {
@@ -365,9 +657,16 @@ export function DeviceConnection({
     };
   }, [isConnected]);
 
+  // Only render client-side content after hydration is complete
+  const [isHydrated, setIsHydrated] = useState(false);
+
+  useEffect(() => {
+    setIsHydrated(true);
+  }, []);
+
   return (
-    <div className="space-y-4">
-      {!isSerialSupported && (
+    <div className="space-y-4" suppressHydrationWarning>
+      {isHydrated && isSerialSupported === false && (
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -385,76 +684,106 @@ export function DeviceConnection({
         </motion.div>
       )}
 
-      <div className="flex flex-col sm:flex-row items-center gap-4">
-        <Button
-          onClick={isConnected ? disconnectFromDevice : connectToDevice}
-          disabled={isConnecting}
-          variant={isConnected ? "destructive" : "default"}
-          size="lg"
-          className="w-full sm:w-auto py-6 text-base transition-all duration-300 shadow-md hover:shadow-lg"
-        >
-          {isConnecting ? (
-            <>
-              <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-              Đang kết nối...
-            </>
-          ) : isConnected ? (
-            <>
-              <WifiOff className="mr-2 h-5 w-5" />
-              Ngắt kết nối
-            </>
-          ) : (
-            <>
-              <Usb className="mr-2 h-5 w-5" />
-              Kết nối thiết bị
-            </>
-          )}
-        </Button>
+      {/* Only render interactive elements after hydration */}
+      {isHydrated ? (
+        <>
+          <div className="flex flex-col sm:flex-row items-center gap-4">
+            <Button
+              onClick={isConnected ? disconnectFromDevice : connectToDevice}
+              disabled={isConnecting || isSerialSupported === null}
+              variant={isConnected ? "destructive" : "default"}
+              size="lg"
+              className="w-full sm:w-auto py-6 text-base transition-all duration-300 shadow-md hover:shadow-lg"
+            >
+              {isConnecting ? (
+                <>
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                  Đang kết nối...
+                </>
+              ) : isConnected ? (
+                <>
+                  <WifiOff className="mr-2 h-5 w-5" />
+                  Ngắt kết nối
+                </>
+              ) : (
+                <>
+                  <Usb className="mr-2 h-5 w-5" />
+                  Kết nối thiết bị
+                </>
+              )}
+            </Button>
 
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          <Badge
-            variant={isConnected ? "success" : "outline"}
-            className={`px-3 py-1.5 text-sm ${
-              isConnected ? "bg-green-500 animate-pulse" : ""
-            }`}
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <Badge
+                variant={isConnected ? "success" : "outline"}
+                className={`px-3 py-1.5 text-sm ${
+                  isConnected ? "bg-green-500 animate-pulse" : ""
+                }`}
+              >
+                {isConnected ? (
+                  <span className="flex items-center">
+                    <Wifi className="mr-1.5 h-3.5 w-3.5" />
+                    Đã kết nối
+                  </span>
+                ) : (
+                  <span className="flex items-center">
+                    <WifiOff className="mr-1.5 h-3.5 w-3.5" />
+                    Chưa kết nối
+                  </span>
+                )}
+              </Badge>
+            </div>
+          </div>
+
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3 }}
+            >
+              <Card className="p-4 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 rounded-lg">
+                <div className="flex items-center text-red-600 dark:text-red-400">
+                  <AlertTriangle className="h-5 w-5 mr-2 flex-shrink-0" />
+                  <p>{error}</p>
+                </div>
+              </Card>
+            </motion.div>
+          )}
+
+          {isConnected && isDemoMode && (
+            <div className="mt-4 p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-lg">
+              <p className="text-amber-700 dark:text-amber-400 text-sm flex items-center">
+                <AlertTriangle className="h-4 w-4 mr-2 flex-shrink-0" />
+                Đang chạy ở chế độ demo. Dữ liệu được mô phỏng cho mục đích xem
+                trước.
+              </p>
+            </div>
+          )}
+        </>
+      ) : (
+        // Placeholder during server-side rendering to avoid hydration mismatch
+        <div className="flex flex-col sm:flex-row items-center gap-4">
+          <Button
+            disabled={true}
+            variant="default"
+            size="lg"
+            className="w-full sm:w-auto py-6 text-base transition-all duration-300 shadow-md"
           >
-            {isConnected ? (
-              <span className="flex items-center">
-                <Wifi className="mr-1.5 h-3.5 w-3.5" />
-                Đã kết nối
-              </span>
-            ) : (
+            <Usb className="mr-2 h-5 w-5" />
+            Kết nối thiết bị
+          </Button>
+
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <Badge
+              variant="outline"
+              className="px-3 py-1.5 text-sm"
+            >
               <span className="flex items-center">
                 <WifiOff className="mr-1.5 h-3.5 w-3.5" />
                 Chưa kết nối
               </span>
-            )}
-          </Badge>
-        </div>
-      </div>
-
-      {error && (
-        <motion.div
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3 }}
-        >
-          <Card className="p-4 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 rounded-lg">
-            <div className="flex items-center text-red-600 dark:text-red-400">
-              <AlertTriangle className="h-5 w-5 mr-2 flex-shrink-0" />
-              <p>{error}</p>
-            </div>
-          </Card>
-        </motion.div>
-      )}
-
-      {isConnected && isDemoMode && (
-        <div className="mt-4 p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-lg">
-          <p className="text-amber-700 dark:text-amber-400 text-sm flex items-center">
-            <AlertTriangle className="h-4 w-4 mr-2 flex-shrink-0" />
-            Đang chạy ở chế độ demo. Dữ liệu được mô phỏng cho mục đích xem
-            trước.
-          </p>
+            </Badge>
+          </div>
         </div>
       )}
     </div>
