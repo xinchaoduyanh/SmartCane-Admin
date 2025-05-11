@@ -235,8 +235,10 @@ export function DeviceConnection({
           // Đọc cấu hình sẽ được xử lý trong processLine
         },
         updateMessageTemplate: async (message: string) => {
-          // Cập nhật tin nhắn SOS
-          await sendCommand(`UPDATE_MSG ${message}`);
+          // Cập nhật tin nhắn SOS - Chưa được hỗ trợ trong mã Arduino hiện tại
+          // Sẽ cần cập nhật mã Arduino để hỗ trợ tính năng này
+          console.log("Cập nhật tin nhắn SOS không được hỗ trợ trong mã Arduino hiện tại");
+          return Promise.resolve();
         },
         clearPhoneNumbers: async () => {
           // Arduino không hỗ trợ xóa tất cả, nên chúng ta sẽ xóa từng số
@@ -246,21 +248,69 @@ export function DeviceConnection({
         addPhoneNumber: async (phone: string) => {
           // Thêm số điện thoại - Arduino sẽ tự động lưu vào EEPROM
           await sendCommand(`ADD ${phone}`);
+
+          // Đợi một chút để Arduino có thời gian xử lý
+          await new Promise(resolve => setTimeout(resolve, 500));
+
+          // Tải lại danh sách từ EEPROM
+          await sendCommand("LIST");
         },
-        deletePhoneNumber: async (index: number) => {
-          // Xóa số điện thoại theo index (Arduino index bắt đầu từ 1)
+        deletePhoneNumber: async (phone: string) => {
+          // Xóa số điện thoại theo số điện thoại
           // Arduino sẽ tự động cập nhật EEPROM
-          await sendCommand(`DELETE ${index + 1}`);
+          await sendCommand(`DELETE ${phone}`);
+
+          // Đợi một chút để Arduino có thời gian xử lý
+          await new Promise(resolve => setTimeout(resolve, 500));
+
+          // Tải lại danh sách từ EEPROM
+          await sendCommand("LIST");
         },
         displayPhoneNumbers: async () => {
           // Hiển thị danh sách số điện thoại đã lưu trong EEPROM
-          await sendCommand("DISPLAY");
+          await sendCommand("LIST");
+        },
+        sendCommand: async (command: string) => {
+          // Gửi lệnh trực tiếp đến Arduino
+          await sendCommand(command);
         },
         // Thêm phương thức để tải lại danh sách từ EEPROM
         reloadPhoneNumbers: async () => {
-          // Gửi lệnh DISPLAY để đọc lại danh sách từ EEPROM
-          await sendCommand("DISPLAY");
+          // Xóa danh sách số điện thoại hiện tại
+          configDataRef.current = { phones: [] };
+
+          // Gửi lệnh LIST để đọc lại danh sách từ EEPROM
+          console.log("Đang gửi lệnh LIST để tải lại danh sách số điện thoại từ EEPROM");
+          await sendCommand("LIST");
+
+          // Đặt timeout để đảm bảo đã nhận đủ danh sách số điện thoại
+          return new Promise<void>((resolve) => {
+            // Đặt timeout để đảm bảo đã nhận đủ danh sách số điện thoại
+            setTimeout(() => {
+              // Đảm bảo có tin nhắn mặc định nếu chưa có
+              if (!configDataRef.current) {
+                configDataRef.current = { phones: [] };
+              }
+
+              if (!configDataRef.current.message) {
+                // Lấy tin nhắn từ localStorage nếu có
+                const savedMessage = localStorage.getItem('messageTemplate');
+                configDataRef.current.message = savedMessage || "Cứu tôi với tôi đang ở {GPS}";
+              }
+
+              // Gửi dữ liệu đến component cha
+              onConfigReceived(configDataRef.current);
+
+              console.log("Đã hoàn thành việc tải lại danh sách số điện thoại:", configDataRef.current.phones);
+              resolve();
+            }, 2000); // Đợi 2 giây để đảm bảo đã nhận đủ danh sách số điện thoại
+          });
         }
+      };
+
+      // Thêm phương thức để yêu cầu dữ liệu mẫu
+      (realConnection as any).requestSampleData = async () => {
+        await sendCommand("SAMPLE_DATA");
       };
 
       // Lưu connection vào context
@@ -272,6 +322,49 @@ export function DeviceConnection({
 
       // Vào chế độ cấu hình
       await sendCommand("CONFIG");
+
+      // Đợi một chút để Arduino có thời gian xử lý
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Gửi lệnh LIST để lấy danh sách số điện thoại
+      console.log("Đang gửi lệnh LIST để lấy danh sách số điện thoại");
+      await sendCommand("LIST");
+
+      // Đợi một chút để Arduino có thời gian xử lý
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Gửi lệnh LIST lần nữa để đảm bảo nhận được danh sách
+      console.log("Đang gửi lệnh LIST lần thứ hai để đảm bảo nhận được danh sách");
+      await sendCommand("LIST");
+
+      // Thiết lập interval để xử lý dữ liệu định kỳ
+      const dataProcessInterval = setInterval(() => {
+        if (!isConnected) {
+          clearInterval(dataProcessInterval);
+        }
+      }, 1000);
+
+      // Thiết lập interval để gửi lệnh LIST định kỳ
+      const listInterval = setInterval(async () => {
+        if (!isConnected) {
+          clearInterval(listInterval);
+          return;
+        }
+
+        try {
+          // Gửi lệnh LIST để cập nhật danh sách số điện thoại
+          await sendCommand("LIST");
+          console.log("Đã gửi lệnh LIST định kỳ");
+        } catch (err) {
+          console.error("Lỗi khi gửi lệnh LIST:", err);
+        }
+      }, 10000); // Gửi lệnh LIST mỗi 10 giây
+
+      // Lưu interval để có thể xóa khi ngắt kết nối
+      (window as any).listInterval = listInterval;
+
+      // Lưu interval để có thể xóa khi ngắt kết nối
+      (window as any).dataProcessInterval = dataProcessInterval;
     } catch (err: any) {
       if (
         err.name === "SecurityError" ||
@@ -354,17 +447,18 @@ export function DeviceConnection({
               }, 500);
               return new Promise((resolve) => setTimeout(resolve, 500));
             },
-            deletePhoneNumber: async (index: number) => {
-              // Mô phỏng xóa số điện thoại theo index từ EEPROM
-              console.log("Mô phỏng: Xóa số điện thoại tại vị trí: " + (index + 1));
+            deletePhoneNumber: async (phone: string) => {
+              // Mô phỏng xóa số điện thoại theo số điện thoại từ EEPROM
+              console.log("Mô phỏng: Xóa số điện thoại: " + phone);
               const phones = simulatedEEPROM.loadPhones();
-              if (index >= 0 && index < phones.length) {
+              const index = phones.indexOf(phone);
+              if (index >= 0) {
                 phones.splice(index, 1);
                 simulatedEEPROM.savePhones(phones);
               }
 
               setTimeout(() => {
-                console.log("Xoa so dien thoai thanh cong!");
+                console.log("Số điện thoại đã được xóa.");
                 onConfigReceived({
                   message: simulatedEEPROM.loadMessage(),
                   phones: simulatedEEPROM.loadPhones()
@@ -413,6 +507,18 @@ export function DeviceConnection({
   // Disconnect from the device
   const disconnectFromDevice = async () => {
     try {
+      // Xóa interval xử lý dữ liệu
+      if ((window as any).dataProcessInterval) {
+        clearInterval((window as any).dataProcessInterval);
+        (window as any).dataProcessInterval = null;
+      }
+
+      // Xóa interval gửi lệnh LIST
+      if ((window as any).listInterval) {
+        clearInterval((window as any).listInterval);
+        (window as any).listInterval = null;
+      }
+
       if (readerRef.current) {
         await readerRef.current.cancel();
         readerRef.current.releaseLock();
@@ -479,10 +585,43 @@ export function DeviceConnection({
     }
   };
 
+  // Format phone number to +84 format
+  const formatToInternational = (phone: string) => {
+    // If already in international format, return as is
+    if (phone.startsWith('+84')) {
+      return phone;
+    }
+
+    // If starts with 0, replace with +84
+    if (phone.startsWith('0')) {
+      return '+84' + phone.substring(1);
+    }
+
+    // If starts with 84 (without +), add the + prefix
+    if (phone.startsWith('84')) {
+      return '+' + phone;
+    }
+
+    // If doesn't start with 0, 84 or +84, assume it's missing the prefix and add +84
+    return '+84' + phone;
+  };
+
+  // Khởi tạo danh sách listeners
+  if (!(window as any).lineListeners) {
+    (window as any).lineListeners = [];
+  }
+
   // Process a line of data from the device
   const processLine = (line: string) => {
     console.log("Processing line:", line);
     if (!line) return;
+
+    // Gọi tất cả các listeners
+    if ((window as any).lineListeners && (window as any).lineListeners.length > 0) {
+      for (const listener of (window as any).lineListeners) {
+        listener(line);
+      }
+    }
 
     try {
       // Xử lý dữ liệu cấu hình
@@ -516,18 +655,78 @@ export function DeviceConnection({
       }
 
       // Xử lý danh sách số điện thoại từ Arduino
-      if (line === "Danh sach so dien thoai:") {
+      if (line === "Danh sach so dien thoai:" || line === "Danh sách số điện thoại:") {
         // Bắt đầu nhận danh sách số điện thoại
+        console.log("Bắt đầu nhận danh sách số điện thoại");
         configDataRef.current = { phones: [] };
         return;
       } else if (line.match(/^\d+\. /)) {
         // Dòng chứa số điện thoại: "1. 0123456789"
         const phoneMatch = line.match(/^\d+\. (.+)$/);
         if (phoneMatch && phoneMatch[1]) {
+          const formattedPhone = formatToInternational(phoneMatch[1]);
+          if (!configDataRef.current) {
+            configDataRef.current = { phones: [] };
+          }
           if (!configDataRef.current.phones) {
             configDataRef.current.phones = [];
           }
-          configDataRef.current.phones.push(phoneMatch[1]);
+          configDataRef.current.phones.push(formattedPhone);
+        }
+        return;
+      } else if (line.match(/^Số điện thoại từ EEPROM: (.+)$/)) {
+        // Dòng chứa số điện thoại từ EEPROM: "Số điện thoại từ EEPROM: 0123456789"
+        const phoneMatch = line.match(/^Số điện thoại từ EEPROM: (.+)$/);
+        if (phoneMatch && phoneMatch[1]) {
+          // Định dạng số điện thoại về dạng quốc tế (+84)
+          const formattedPhone = formatToInternational(phoneMatch[1]);
+          console.log("Phát hiện số điện thoại từ EEPROM:", formattedPhone);
+          if (!configDataRef.current) {
+            configDataRef.current = { phones: [] };
+          }
+          if (!configDataRef.current.phones) {
+            configDataRef.current.phones = [];
+          }
+          // Kiểm tra xem số điện thoại đã tồn tại trong danh sách chưa
+          if (!configDataRef.current.phones.includes(formattedPhone)) {
+            configDataRef.current.phones.push(formattedPhone);
+          }
+        }
+        return;
+      } else if (!line.startsWith("Danh sach so dien thoai:") &&
+                 !line.startsWith("Danh sách số điện thoại:") &&
+                 !line.includes("Khoang cach:") &&
+                 !line.includes("Trang thai mua:") &&
+                 !line.includes("Toa do:") &&
+                 !line.includes("-------------------") &&
+                 !line.includes("Cap nhat GPS:") &&
+                 !line.includes("Nut duoc nhan") &&
+                 !line.includes("Bat lai GPS") &&
+                 !line.includes("Dang cho GPS") &&
+                 !line.includes("Module SIM") &&
+                 !line.includes("Khoi dong") &&
+                 !line.includes("Lenh khong hop le") &&
+                 !line.includes("Danh sach so dien thoai da day") &&
+                 !line.includes("Khong tim thay so") &&
+                 !line.includes("Không tìm thấy số điện thoại cần xóa") &&
+                 !line.includes("Da them so:") &&
+                 !line.includes("Da xoa so:") &&
+                 !line.includes("So dien thoai da ton tai") &&
+                 line.length > 5 &&
+                 (line.startsWith("+84") || line.startsWith("0") || line.match(/^\d{9,12}$/))) {
+        // Đây có thể là một số điện thoại từ Arduino
+        // Định dạng số điện thoại về dạng quốc tế (+84)
+        const formattedPhone = formatToInternational(line);
+        console.log("Phát hiện số điện thoại trực tiếp:", formattedPhone);
+        if (!configDataRef.current) {
+          configDataRef.current = { phones: [] };
+        }
+        if (!configDataRef.current.phones) {
+          configDataRef.current.phones = [];
+        }
+        // Kiểm tra xem số điện thoại đã tồn tại trong danh sách chưa
+        if (!configDataRef.current.phones.includes(formattedPhone)) {
+          configDataRef.current.phones.push(formattedPhone);
         }
         return;
       } else if (line === "Cap nhat tin nhan SOS thanh cong!") {
@@ -537,14 +736,32 @@ export function DeviceConnection({
       } else if (line === "Them so dien thoai thanh cong!") {
         // Xác nhận thêm số điện thoại thành công
         console.log("Thêm số điện thoại thành công");
-        // Gửi lệnh DISPLAY để cập nhật danh sách
-        setTimeout(() => sendCommand("DISPLAY"), 500);
+        // Gửi lệnh LIST để cập nhật danh sách
+        setTimeout(() => sendCommand("LIST"), 500);
         return;
       } else if (line === "Xoa so dien thoai thanh cong!") {
         // Xác nhận xóa số điện thoại thành công
         console.log("Xóa số điện thoại thành công");
-        // Gửi lệnh DISPLAY để cập nhật danh sách
-        setTimeout(() => sendCommand("DISPLAY"), 500);
+        // Gửi lệnh LIST để cập nhật danh sách
+        setTimeout(() => sendCommand("LIST"), 500);
+        return;
+      } else if (line === "Số điện thoại đã được thêm.") {
+        // Xác nhận thêm số điện thoại thành công (định dạng mới)
+        console.log("Thêm số điện thoại thành công (định dạng mới)");
+        // Gửi lệnh LIST để cập nhật danh sách
+        setTimeout(() => sendCommand("LIST"), 500);
+        return;
+      } else if (line === "Số điện thoại đã được xóa.") {
+        // Xác nhận xóa số điện thoại thành công (định dạng mới)
+        console.log("Xóa số điện thoại thành công (định dạng mới)");
+        // Gửi lệnh LIST để cập nhật danh sách
+        setTimeout(() => sendCommand("LIST"), 500);
+        return;
+      } else if (line === "Số điện thoại từ EEPROM:") {
+        // Bắt đầu nhận số điện thoại từ EEPROM
+        if (!configDataRef.current) {
+          configDataRef.current = { phones: [] };
+        }
         return;
       }
 
@@ -558,13 +775,32 @@ export function DeviceConnection({
         }
       }
 
-      if (line.includes(">> Co mua!")) {
-        data.isRaining = 0;
-      } else if (line.includes(">> Khong mua.")) {
-        data.isRaining = 1;
+      // Kiểm tra định dạng "Trang thai mua: Co mua" hoặc "Trang thai mua: Khong mua"
+      if (line.includes("Trang thai mua: Co mua")) {
+        data.isRaining = 0; // 0 = có mưa (true)
+        console.log("Phát hiện mưa!");
+      } else if (line.includes("Trang thai mua: Khong mua")) {
+        data.isRaining = 1; // 1 = không mưa (false)
+        console.log("Không có mưa.");
       }
 
+      // Giữ lại các định dạng cũ để tương thích
+      else if (line.includes(">> Co mua!")) {
+        data.isRaining = 0; // 0 = có mưa (true)
+        console.log("Phát hiện mưa (định dạng cũ)!");
+      } else if (line.includes(">> Khong mua.")) {
+        data.isRaining = 1; // 1 = không mưa (false)
+        console.log("Không có mưa (định dạng cũ).");
+      } else if (line.startsWith("isRaining:")) {
+        // Xử lý dữ liệu trực tiếp từ Arduino
+        const isRainingValue = line.substring(10).trim();
+        data.isRaining = isRainingValue === "true" ? 0 : 1;
+        console.log("Trạng thái mưa trực tiếp:", isRainingValue);
+      }
+
+      // Xử lý dữ liệu GPS từ Arduino
       if (line.includes("Toa do:")) {
+        // Kiểm tra định dạng "Toa do: X.XXXXXX, Y.YYYYYY"
         const match = line.match(/Toa do: (-?\d+\.?\d*), (-?\d+\.?\d*)/);
         if (match) {
           data.gps = {
@@ -572,18 +808,79 @@ export function DeviceConnection({
             lng: Number.parseFloat(match[2]),
           };
         }
+        // Kiểm tra định dạng "Lat: X.XXXXXX"
+        else if (line.includes("Lat:")) {
+          const latMatch = line.match(/Lat: (-?\d+\.?\d*)/);
+          if (latMatch) {
+            if (!data.gps) data.gps = { lat: 0, lng: 0 };
+            data.gps.lat = Number.parseFloat(latMatch[1]);
+          }
+        }
+        // Kiểm tra định dạng "Lng: Y.YYYYYY"
+        else if (line.includes("Lng:")) {
+          const lngMatch = line.match(/Lng: (-?\d+\.?\d*)/);
+          if (lngMatch) {
+            if (!data.gps) data.gps = { lat: 0, lng: 0 };
+            data.gps.lng = Number.parseFloat(lngMatch[1]);
+          }
+        }
       }
 
       // Nếu nhận được danh sách số điện thoại đầy đủ, gửi đến component cha
+      // Sử dụng timeout để đảm bảo đã nhận đủ danh sách số điện thoại
+      if (line === "Danh sách số điện thoại:" || line === "Danh sach so dien thoai:" || line === "LIST") {
+        console.log("Nhận được tiêu đề danh sách số điện thoại");
+        // Xóa danh sách số điện thoại hiện tại
+        configDataRef.current = { phones: [] };
+
+        // Đặt timeout để gửi danh sách số điện thoại sau khi đã nhận đủ
+        setTimeout(() => {
+          console.log("Gửi danh sách số điện thoại đến component cha:", configDataRef.current.phones);
+          // Đảm bảo có tin nhắn mặc định nếu chưa có
+          if (!configDataRef.current.message) {
+            // Lấy tin nhắn từ localStorage nếu có
+            const savedMessage = localStorage.getItem('messageTemplate');
+            configDataRef.current.message = savedMessage || "Cứu tôi với tôi đang ở {GPS}";
+          }
+          onConfigReceived(configDataRef.current);
+        }, 3000); // Đợi 3 giây để đảm bảo đã nhận đủ danh sách số điện thoại
+      }
+
+      // Xử lý khi nhận được dấu hiệu kết thúc danh sách
       if (configDataRef.current && configDataRef.current.phones &&
           configDataRef.current.phones.length > 0 &&
-          line.includes("----------------------------")) {
+          (line.includes("----------------------------") || line === "")) {
+        console.log("Nhận được dấu hiệu kết thúc danh sách số điện thoại");
         // Đảm bảo có tin nhắn mặc định nếu chưa có
         if (!configDataRef.current.message) {
-          configDataRef.current.message = "Cứu tôi với tôi đang ở {GPS}";
+          // Lấy tin nhắn từ localStorage nếu có
+          const savedMessage = localStorage.getItem('messageTemplate');
+          configDataRef.current.message = savedMessage || "Cứu tôi với tôi đang ở {GPS}";
         }
-        onConfigReceived(configDataRef.current);
-        configDataRef.current = {};
+
+        // Đặt timeout để đảm bảo đã nhận đủ danh sách số điện thoại
+        setTimeout(() => {
+          onConfigReceived(configDataRef.current);
+          configDataRef.current = {};
+        }, 500);
+      }
+
+      // Xử lý khi không có số điện thoại nào trong danh sách
+      if (line === "Danh sách số điện thoại:" && !configDataRef.current) {
+        configDataRef.current = { phones: [] };
+
+        // Đặt timeout để đảm bảo đã nhận đủ danh sách số điện thoại
+        setTimeout(() => {
+          console.log("Không có số điện thoại nào trong danh sách");
+          // Đảm bảo có tin nhắn mặc định nếu chưa có
+          if (!configDataRef.current.message) {
+            // Lấy tin nhắn từ localStorage nếu có
+            const savedMessage = localStorage.getItem('messageTemplate');
+            configDataRef.current.message = savedMessage || "Cứu tôi với tôi đang ở {GPS}";
+          }
+          onConfigReceived(configDataRef.current);
+          configDataRef.current = {};
+        }, 2000);
       }
 
       if (Object.keys(data).length > 0) {
@@ -605,9 +902,21 @@ export function DeviceConnection({
     // Send initial data
     onDataReceived({
       distance: simulatedDistance,
-      isRaining: simulatedIsRaining ? 0 : 1,
+      isRaining: simulatedIsRaining ? 0 : 1, // 0 = có mưa (true), 1 = không mưa (false)
       gps: { lat: simulatedLat, lng: simulatedLng },
     });
+
+    // Gửi dữ liệu mẫu qua processLine để đảm bảo xử lý đúng - theo định dạng của Arduino
+    processLine("Khoang cach: " + simulatedDistance + " cm | Trang thai mua: " +
+                (simulatedIsRaining ? "Co mua" : "Khong mua"));
+
+    // Gửi dữ liệu GPS theo định dạng của Arduino
+    const gpsData = "Toa do:\nLat: " + simulatedLat.toFixed(6) +
+                    "\nLng: " + simulatedLng.toFixed(6) +
+                    "\nAlt: 100.0m\nSpeed: 0.0km/h\nSat: 8";
+    processLine("Cap nhat GPS:");
+    processLine(gpsData);
+    processLine("-------------------");
 
     // Update data periodically
     const dataInterval = setInterval(() => {
@@ -636,10 +945,24 @@ export function DeviceConnection({
       simulatedLat += (Math.random() - 0.5) * 0.0001;
       simulatedLng += (Math.random() - 0.5) * 0.0001;
 
-      // Send the simulated data
+      // Gửi dữ liệu qua processLine để đảm bảo xử lý đúng - theo định dạng của Arduino
+      processLine("Khoang cach: " + simulatedDistance.toFixed(1) + " cm | Trang thai mua: " +
+                  (simulatedIsRaining ? "Co mua" : "Khong mua"));
+
+      // Thỉnh thoảng gửi dữ liệu GPS mới (20% chance)
+      if (Math.random() < 0.2) {
+        const updatedGpsData = "Toa do:\nLat: " + simulatedLat.toFixed(6) +
+                              "\nLng: " + simulatedLng.toFixed(6) +
+                              "\nAlt: 100.0m\nSpeed: 0.0km/h\nSat: 8";
+        processLine("Cap nhat GPS:");
+        processLine(updatedGpsData);
+        processLine("-------------------");
+      }
+
+      // Send the simulated data directly
       onDataReceived({
         distance: simulatedDistance,
-        isRaining: simulatedIsRaining ? 0 : 1,
+        isRaining: simulatedIsRaining ? 0 : 1, // 0 = có mưa (true), 1 = không mưa (false)
         gps: { lat: simulatedLat, lng: simulatedLng },
       });
     }, 1000); // Cập nhật mỗi giây

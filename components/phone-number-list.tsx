@@ -12,7 +12,7 @@ interface PhoneNumberListProps {
   setPhoneNumbers: (phones: string[]) => void
   disabled?: boolean
   onAddPhone?: (phone: string) => Promise<void> // Callback để thêm số điện thoại trực tiếp từ thiết bị
-  onDeletePhone?: (index: number) => Promise<void> // Callback để xóa số điện thoại trực tiếp từ thiết bị
+  onDeletePhone?: (phone: string) => Promise<void> // Callback để xóa số điện thoại trực tiếp từ thiết bị (theo số điện thoại, không phải index)
   useDirectCommunication?: boolean // Sử dụng giao tiếp trực tiếp với thiết bị
 }
 
@@ -38,7 +38,29 @@ export function PhoneNumberList({
   // Validate Vietnamese phone number
   const isValidPhoneNumber = (phone: string) => {
     // Basic Vietnamese phone number validation
-    return /^(0|\+84)(\d{9,10})$/.test(phone)
+    // Chấp nhận các định dạng: 0xxxxxxxxx, +84xxxxxxxxx, 84xxxxxxxxx
+    return /^(0|\+84|84)(\d{9,10})$/.test(phone)
+  }
+
+  // Format phone number to +84 format
+  const formatToInternational = (phone: string) => {
+    // If already in international format, return as is
+    if (phone.startsWith('+84')) {
+      return phone;
+    }
+
+    // If starts with 0, replace with +84
+    if (phone.startsWith('0')) {
+      return '+84' + phone.substring(1);
+    }
+
+    // If starts with 84 (without +), add the + prefix
+    if (phone.startsWith('84')) {
+      return '+' + phone;
+    }
+
+    // If doesn't start with 0, 84 or +84, assume it's missing the prefix and add +84
+    return '+84' + phone;
   }
 
   // Add a new phone number
@@ -53,29 +75,46 @@ export function PhoneNumberList({
       return
     }
 
-    if (phoneNumbers.includes(newPhoneNumber)) {
+    // Format phone number to international format (+84)
+    const formattedPhoneNumber = formatToInternational(newPhoneNumber);
+
+    // Kiểm tra xem số điện thoại đã tồn tại trong danh sách chưa
+    if (phoneNumbers.some(phone => formatToInternational(phone) === formattedPhoneNumber)) {
       setError("Số điện thoại đã tồn tại trong danh sách")
       return
     }
 
     try {
-      // Nếu sử dụng giao tiếp trực tiếp với thiết bị
-      if (useDirectCommunication && onAddPhone) {
-        // Gửi lệnh thêm số điện thoại đến thiết bị
-        await onAddPhone(newPhoneNumber)
-        // Không cần cập nhật state vì sẽ được cập nhật từ thiết bị
-      } else {
-        // Cập nhật state trực tiếp nếu không sử dụng giao tiếp với thiết bị
-        setPhoneNumbers([...phoneNumbers, newPhoneNumber])
-      }
+      // Cập nhật state ngay lập tức để UI phản hồi nhanh chóng
+      setPhoneNumbers([...phoneNumbers, formattedPhoneNumber])
 
+      // Xóa số điện thoại đã nhập và lỗi
       setNewPhoneNumber("")
       setError(null)
 
+      // Hiển thị toast thành công
       toast({
         title: "Đã thêm số điện thoại",
-        description: `Số ${newPhoneNumber} đã được thêm vào danh sách`,
+        description: `Số ${formattedPhoneNumber} đã được thêm vào danh sách`,
       })
+
+      // Nếu sử dụng giao tiếp trực tiếp với thiết bị, gửi lệnh thêm đến thiết bị
+      if (useDirectCommunication && onAddPhone) {
+        try {
+          // Gửi lệnh thêm số điện thoại đến thiết bị
+          await onAddPhone(formattedPhoneNumber)
+        } catch (deviceErr) {
+          console.error("Lỗi khi thêm số điện thoại vào thiết bị:", deviceErr)
+          // Nếu thêm vào thiết bị thất bại, hiển thị thông báo lỗi
+          toast({
+            title: "Lỗi đồng bộ",
+            description: "Không thể thêm số điện thoại vào thiết bị. Vui lòng thử lại.",
+            variant: "destructive",
+          })
+          // Xóa số điện thoại khỏi state nếu thêm vào thiết bị thất bại
+          setPhoneNumbers(phoneNumbers.filter(phone => phone !== formattedPhoneNumber))
+        }
+      }
     } catch (err) {
       console.error("Lỗi khi thêm số điện thoại:", err)
       toast({
@@ -90,23 +129,40 @@ export function PhoneNumberList({
   const removePhoneNumber = async (index: number) => {
     const removedNumber = phoneNumbers[index]
 
-    try {
-      // Nếu sử dụng giao tiếp trực tiếp với thiết bị
-      if (useDirectCommunication && onDeletePhone) {
-        // Gửi lệnh xóa số điện thoại đến thiết bị
-        await onDeletePhone(index)
-        // Không cần cập nhật state vì sẽ được cập nhật từ thiết bị
-      } else {
-        // Cập nhật state trực tiếp nếu không sử dụng giao tiếp với thiết bị
-        const updatedNumbers = [...phoneNumbers]
-        updatedNumbers.splice(index, 1)
-        setPhoneNumbers(updatedNumbers)
-      }
+    // Đảm bảo số điện thoại ở định dạng quốc tế (+84)
+    const formattedRemovedNumber = formatToInternational(removedNumber);
 
+    try {
+      // Cập nhật state ngay lập tức để UI phản hồi nhanh chóng
+      const updatedNumbers = [...phoneNumbers]
+      updatedNumbers.splice(index, 1)
+      setPhoneNumbers(updatedNumbers)
+
+      // Hiển thị toast thành công
       toast({
         title: "Đã xóa số điện thoại",
-        description: `Số ${removedNumber} đã được xóa khỏi danh sách`,
+        description: `Số ${formattedRemovedNumber} đã được xóa khỏi danh sách`,
       })
+
+      // Nếu sử dụng giao tiếp trực tiếp với thiết bị, gửi lệnh xóa đến thiết bị
+      if (useDirectCommunication && onDeletePhone) {
+        try {
+          // Gửi lệnh xóa số điện thoại đến thiết bị
+          await onDeletePhone(formattedRemovedNumber)
+        } catch (deviceErr) {
+          console.error("Lỗi khi xóa số điện thoại từ thiết bị:", deviceErr)
+          // Nếu xóa từ thiết bị thất bại, khôi phục lại state
+          toast({
+            title: "Lỗi đồng bộ",
+            description: "Không thể xóa số điện thoại từ thiết bị. Vui lòng thử lại.",
+            variant: "destructive",
+          })
+          // Khôi phục lại state nếu xóa từ thiết bị thất bại
+          const restoredNumbers = [...updatedNumbers]
+          restoredNumbers.splice(index, 0, removedNumber)
+          setPhoneNumbers(restoredNumbers)
+        }
+      }
     } catch (err) {
       console.error("Lỗi khi xóa số điện thoại:", err)
       toast({

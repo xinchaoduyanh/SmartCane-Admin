@@ -55,6 +55,7 @@ export default function Home() {
   const [phoneNumbers, setPhoneNumbers] = useState<string[]>([]);
   const [isConfigLoaded, setIsConfigLoaded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
 
@@ -110,21 +111,37 @@ export default function Home() {
       setDistance(data.distance);
     }
     if (data.isRaining !== undefined) {
-      setIsRaining(data.isRaining === 0);
+      // isRaining = 0 nghĩa là có mưa (true)
+      // isRaining = 1 nghĩa là không mưa (false)
+      const isRainingValue = data.isRaining === 0;
+      console.log("Trạng thái mưa:", isRainingValue ? "Có mưa" : "Không mưa");
+      setIsRaining(isRainingValue);
+
+      // Cập nhật thời gian
+      setLastUpdate(new Date().toLocaleTimeString());
     }
     if (data.gps && data.gps.lat && data.gps.lng) {
       setCurrentLocation(data.gps);
+      // Cập nhật thời gian
+      setLastUpdate(new Date().toLocaleTimeString());
     }
   };
 
   // Handle configuration received from device
   const handleConfigReceived = (config: any) => {
+    console.log("Nhận được cấu hình từ thiết bị:", config);
+
     if (config.message) {
       setMessageTemplate(config.message);
     }
 
     if (config.phones) {
-      setPhoneNumbers(config.phones.filter((phone: string) => phone));
+      // Lọc các số điện thoại hợp lệ (không rỗng và không phải undefined)
+      const validPhones = config.phones.filter((phone: string) => phone && phone.trim() !== "");
+      console.log("Danh sách số điện thoại hợp lệ:", validPhones);
+
+      // Cập nhật danh sách số điện thoại
+      setPhoneNumbers(validPhones);
     }
 
     setIsConfigLoaded(true);
@@ -142,29 +159,49 @@ export default function Home() {
     setIsSaving(true);
 
     try {
-      // Cập nhật tin nhắn SOS - sẽ được lưu vào EEPROM bởi Arduino
-      await deviceConnection.updateMessageTemplate(messageTemplate);
-      console.log("Đã cập nhật tin nhắn SOS:", messageTemplate);
+      // Lưu tin nhắn SOS vào localStorage để sử dụng trong chế độ demo
+      localStorage.setItem('messageTemplate', messageTemplate);
+      console.log("Đã lưu tin nhắn SOS vào localStorage:", messageTemplate);
 
-      // Xóa tất cả số điện thoại cũ và thêm lại từng số
-      // Arduino sẽ tự động lưu vào EEPROM
-      const currentPhones = [...phoneNumbers];
+      // Lấy danh sách số điện thoại hiện tại từ Arduino
+      if (deviceConnection.reloadPhoneNumbers) {
+        await deviceConnection.reloadPhoneNumbers();
+      }
 
-      // Nếu có hàm xóa theo index, chúng ta sẽ xóa từng số và thêm lại
-      if (deviceConnection.deletePhoneNumber) {
-        // Tải lại danh sách từ EEPROM trước khi thêm/xóa
-        if (deviceConnection.reloadPhoneNumbers) {
-          await deviceConnection.reloadPhoneNumbers();
+      // Lấy danh sách số điện thoại hiện tại từ Arduino
+      const existingPhones = await new Promise<string[]>((resolve) => {
+        // Đặt một timeout để đảm bảo danh sách số điện thoại đã được tải
+        setTimeout(() => {
+          resolve([...phoneNumbers]);
+        }, 1000);
+      });
+
+      // Xóa tất cả số điện thoại cũ
+      for (const phone of existingPhones) {
+        // Đảm bảo số điện thoại ở định dạng quốc tế (+84)
+        const formattedPhone = formatToInternational(phone);
+        console.log("Đang xóa số điện thoại:", formattedPhone);
+        try {
+          await deviceConnection.deletePhoneNumber(formattedPhone);
+          // Đợi một chút để Arduino có thời gian xử lý
+          await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (error) {
+          console.error("Lỗi khi xóa số điện thoại:", error);
         }
-      } else {
-        // Nếu không có hàm xóa theo index, chúng ta sẽ xóa tất cả và thêm lại
-        await deviceConnection.clearPhoneNumbers();
       }
 
       // Thêm từng số điện thoại mới - Arduino sẽ tự động lưu vào EEPROM
-      for (const phone of currentPhones) {
-        console.log("Đang thêm số điện thoại:", phone);
-        await deviceConnection.addPhoneNumber(phone);
+      for (const phone of phoneNumbers) {
+        // Đảm bảo số điện thoại ở định dạng quốc tế (+84)
+        const formattedPhone = formatToInternational(phone);
+        console.log("Đang thêm số điện thoại:", formattedPhone);
+        try {
+          await deviceConnection.addPhoneNumber(formattedPhone);
+          // Đợi một chút để Arduino có thời gian xử lý
+          await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (error) {
+          console.error("Lỗi khi thêm số điện thoại:", error);
+        }
       }
 
       // Tải lại danh sách từ EEPROM sau khi thêm/xóa
@@ -186,6 +223,27 @@ export default function Home() {
     } finally {
       setIsSaving(false);
     }
+  };
+
+  // Format phone number to +84 format
+  const formatToInternational = (phone: string) => {
+    // If already in international format, return as is
+    if (phone.startsWith('+84')) {
+      return phone;
+    }
+
+    // If starts with 0, replace with +84
+    if (phone.startsWith('0')) {
+      return '+84' + phone.substring(1);
+    }
+
+    // If starts with 84 (without +), add the + prefix
+    if (phone.startsWith('84')) {
+      return '+' + phone;
+    }
+
+    // If doesn't start with 0, 84 or +84, assume it's missing the prefix and add +84
+    return '+84' + phone;
   };
 
   // Generate message with GPS coordinates
@@ -609,7 +667,31 @@ export default function Home() {
                           size="sm"
                           onClick={async () => {
                             try {
-                              await deviceConnection.reloadPhoneNumbers();
+                              // Hiển thị trạng thái đang tải
+                              toast({
+                                title: "Đang tải danh sách",
+                                description: "Đang tải danh sách số điện thoại từ EEPROM...",
+                                duration: 3000, // Tự động đóng sau 3 giây
+                              });
+
+                              // Xóa danh sách số điện thoại hiện tại
+                              setPhoneNumbers([]);
+
+                              // Hiển thị trạng thái đang tải trong UI
+                              setIsLoading(true);
+
+                              try {
+                                // Tải lại danh sách từ EEPROM
+                                await deviceConnection.reloadPhoneNumbers();
+
+                                // Log để debug
+                                console.log("Đã hoàn thành việc tải lại danh sách số điện thoại");
+                              } finally {
+                                // Ẩn trạng thái đang tải
+                                setIsLoading(false);
+                              }
+
+                              // Hiển thị toast thành công
                               toast({
                                 title: "Đã tải lại danh sách",
                                 description: "Danh sách số điện thoại đã được tải lại từ EEPROM",
@@ -624,9 +706,19 @@ export default function Home() {
                             }
                           }}
                           className="flex items-center"
+                          disabled={isLoading}
                         >
-                          <RefreshCw className="mr-2 h-4 w-4" />
-                          Tải lại từ EEPROM
+                          {isLoading ? (
+                            <>
+                              <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                              Đang tải...
+                            </>
+                          ) : (
+                            <>
+                              <RefreshCw className="mr-2 h-4 w-4" />
+                              Tải lại từ EEPROM
+                            </>
+                          )}
                         </Button>
                       )}
                     </div>
